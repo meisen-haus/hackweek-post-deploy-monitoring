@@ -14,9 +14,8 @@ the regression the new release introduced.
 ```
 push/merge to main
   └─ .github/workflows/deploy.yml
-       ├─ build           → vite build, release stamped with github.sha
+       ├─ build           → vite build, release, sourcemaps injected + uploaded
        ├─ deploy          → GitHub Pages
-       ├─ sentry-release  → releases new, set-commits, sourcemaps, finalize
        ├─ smoke           → Playwright against the live site (generates telemetry)
        └─ sentry-deploy   → deploys new
                                     ↓
@@ -26,7 +25,7 @@ push/merge to main
 The webhook is not sent by CI — CI only registers the deploy, and **Sentry** emits
 the webhook off the back of that. Which means the ordering matters: nothing tells
 Sentry a deploy happened until the new bundle is actually serving traffic, so
-`sentry-release` runs *after* `actions/deploy-pages`. Registering the deploy
+`sentry-deploy` runs *after* `actions/deploy-pages`. Registering the deploy
 first would fire the webhook while the old bundle was still live.
 
 ## Synthetic smoke tests
@@ -141,7 +140,7 @@ anything hardcoded.
 
 ### Triggering the webhook locally
 
-If you'd rather not tunnel, the CI `sentry-release` job has a local counterpart:
+If you'd rather not tunnel, the CI release/deploy steps have a local counterpart:
 
 ```bash
 npm run build
@@ -189,7 +188,7 @@ against the project this workflow registers deploys for.
 
 ### What the deploy carries
 
-The `sentry-release` job registers a deploy with these attributes, which are what
+The `sentry-deploy` job registers a deploy with these attributes, which are what
 the webhook has to work with:
 
 | Attribute | Value |
@@ -198,6 +197,7 @@ the webhook has to work with:
 | environment | `production` |
 | url | the Pages URL, from `actions/deploy-pages` |
 | commits | associated via `set-commits --auto` when the repo is linked in Sentry |
+| sourcemaps | debug IDs injected into `dist/` before Pages publishes, uploaded against the release |
 
 The release version is the join key: the same value is the `release` tag on every
 event the deployed bundle sends, so a webhook consumer can go straight from

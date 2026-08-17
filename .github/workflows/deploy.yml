@@ -24,6 +24,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so Sentry can associate commits with the release.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -41,18 +44,42 @@ jobs:
           VITE_ENVIRONMENT: ${{ env.ENVIRONMENT }}
         run: npm run build
 
+      # Runs BEFORE the Pages upload on purpose. `sourcemaps inject` stamps debug
+      # IDs into dist/, and those files are what has to ship — inject after the
+      # upload and the deployed bundle carries no IDs, leaving stack traces to be
+      # matched by URL guesswork instead.
+      - name: Sentry release and sourcemaps
+        if: ${{ vars.SENTRY_URL != '' && vars.SENTRY_PROJECT != '' }}
+        env:
+          # Base URL of the Sentry install: trailing slash, no /api/0. Pointing
+          # at a local devserver means the ngrok host forwarding to it, and the
+          # devserver has to be started with `--ngrok=<host>` so its
+          # system.url-prefix and ALLOWED_HOSTS match.
+          SENTRY_URL: ${{ vars.SENTRY_URL }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_DEV_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG || 'sentry' }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+        run: |
+          set -euo pipefail
+          curl -sL https://sentry.io/get-cli/ | bash
+
+          sentry-cli releases new "$GITHUB_SHA"
+
+          sentry-cli sourcemaps inject dist
+          sentry-cli sourcemaps upload dist --release "$GITHUB_SHA"
+
+          # Commit association needs this repo linked in the org's GitHub
+          # integration. A dev org may have none, so warn instead of failing the
+          # deploy over it.
+          sentry-cli releases set-commits "$GITHUB_SHA" --auto \
+            || echo "::warning::set-commits --auto failed; release has no commits"
+
+          sentry-cli releases finalize "$GITHUB_SHA"
+
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: dist
-
-      # Handed to the notify job so it can upload sourcemaps against the release.
-      - name: Upload build for Sentry
-        if: ${{ vars.SENTRY_URL != '' && vars.SENTRY_PROJECT != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist
           path: dist
 
   deploy:
@@ -68,67 +95,13 @@ jobs:
         uses: actions/deploy-pages@v4
 
   # ---------------------------------------------------------------------------
-  # Register the release and upload its sourcemaps BEFORE any synthetic traffic
-  # runs. Sourcemaps are applied when an event is processed, so events that
-  # arrive before the upload keep minified stack traces forever.
-  # ---------------------------------------------------------------------------
-  sentry-release:
-    needs: deploy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # Full history so Sentry can associate commits with the release.
-          fetch-depth: 0
-
-      # The built bundle + sourcemaps, so the release has artifacts and stack
-      # traces in Sentry point at real source lines instead of minified output.
-      - name: Download build
-        if: ${{ vars.SENTRY_URL != '' && vars.SENTRY_PROJECT != '' }}
-        uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist
-
-      - name: Sentry release
-        if: ${{ vars.SENTRY_URL != '' && vars.SENTRY_PROJECT != '' }}
-        env:
-          # Base URL of the Sentry install: trailing slash, no /api/0. Pointing
-          # at a local devserver means the ngrok host forwarding to it, and the
-          # devserver has to be started with `--ngrok=<host>` so its
-          # system.url-prefix and ALLOWED_HOSTS match.
-          SENTRY_URL: ${{ vars.SENTRY_URL }}
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_DEV_TOKEN }}
-          SENTRY_ORG: ${{ vars.SENTRY_ORG || 'sentry' }}
-          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
-          PAGE_URL: ${{ needs.deploy.outputs.page_url }}
-        run: |
-          set -euo pipefail
-          curl -sL https://sentry.io/get-cli/ | bash
-
-          sentry-cli releases new "$GITHUB_SHA"
-
-          # Commit association needs this repo linked in the org's GitHub
-          # integration. A dev org usually has none, so warn instead of failing
-          # the deploy over it.
-          sentry-cli releases set-commits "$GITHUB_SHA" --auto \
-            || echo "::warning::set-commits --auto failed; release has no commits"
-
-          # Site is served from /<repo>/, so artifact URLs need that prefix.
-          sentry-cli sourcemaps upload dist/assets \
-            --release "$GITHUB_SHA" \
-            --url-prefix '~/${{ github.event.repository.name }}/assets'
-
-          sentry-cli releases finalize "$GITHUB_SHA"
-
-  # ---------------------------------------------------------------------------
   # Synthetic smoke tests against the real deploy. Two purposes: catch a broken
   # deploy before the release is announced, and drive a real browser so the SDK
   # loads and the release has telemetry attached to it. A `curl` check would do
   # neither — no JS execution means no events.
   # ---------------------------------------------------------------------------
   smoke:
-    needs: [deploy, sentry-release]
+    needs: deploy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
