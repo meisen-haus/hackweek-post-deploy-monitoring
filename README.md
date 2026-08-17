@@ -16,7 +16,9 @@ push/merge to main
   └─ .github/workflows/deploy.yml
        ├─ build           → vite build, release stamped with github.sha
        ├─ deploy          → GitHub Pages
-       └─ sentry-release  → sentry-cli releases new / sourcemaps / deploys new
+       ├─ sentry-release  → releases new, set-commits, sourcemaps, finalize
+       ├─ smoke           → Playwright against the live site (generates telemetry)
+       └─ sentry-deploy   → deploys new
                                     ↓
                             Sentry fires the post-deploy webhook
 ```
@@ -26,6 +28,42 @@ the webhook off the back of that. Which means the ordering matters: nothing tell
 Sentry a deploy happened until the new bundle is actually serving traffic, so
 `sentry-release` runs *after* `actions/deploy-pages`. Registering the deploy
 first would fire the webhook while the old bundle was still live.
+
+## Synthetic smoke tests
+
+`tests/smoke.spec.ts` runs a real Chromium against the deployed site after every
+deploy. Two jobs at once:
+
+- **Catch a broken deploy.** Hard assertions: the site serves the commit that was
+  just built (guards against a CDN still handing out the old bundle), and the
+  board renders exactly the departures it fetched.
+- **Guarantee the release has telemetry.** Driving a real browser is what makes
+  the SDK load and report — a `curl` check would execute no JavaScript and
+  produce no events. It loads the page several times so the release has more than
+  a single sample behind it.
+
+That second point is why `sentry-deploy` runs *after* this job: by the time your
+webhook fires, the release already has events to look at.
+
+Timings and uncaught errors are **reported to the run summary, not enforced**:
+
+```
+| median time to first row | 283ms |
+| uncaught errors per load | 0.0   |
+```
+
+Which is deliberate. The regression branch still passes every hard assertion —
+the board does render, just three seconds late with an error thrown after paint
+— so CI goes green and Sentry is what catches it. That is the demo. Two commented
+assertions at the bottom of the spec turn those metrics into deploy gates if you
+want the opposite behaviour.
+
+```bash
+SMOKE_URL='https://meisen-haus.github.io/hackweek-post-deploy-monitoring/' npm run smoke
+```
+
+`EXPECTED_RELEASE` (a commit SHA) enables the release check; `SMOKE_LOADS`
+controls how many loads the health pass does.
 
 ## Running the demo
 

@@ -29,6 +29,10 @@ export function initTelemetry(): void {
     replaysOnErrorSampleRate: 1.0,
     sendDefaultPii: true,
   });
+
+  // Exposed so the synthetic smoke tests can flush pending events before the
+  // browser closes, instead of guessing at a sleep long enough to cover it.
+  (window as Window & {Sentry?: typeof Sentry}).Sentry = Sentry;
 }
 
 export {Sentry};

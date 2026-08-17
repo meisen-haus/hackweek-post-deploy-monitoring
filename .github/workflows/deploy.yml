@@ -68,10 +68,9 @@ jobs:
         uses: actions/deploy-pages@v4
 
   # ---------------------------------------------------------------------------
-  # The part this demo exists for. Once the new code is actually live, register
-  # the release and the deploy with Sentry. Registering the deploy is what makes
-  # Sentry fire its post-deploy webhook, so this job runs after Pages is serving
-  # the new bundle — never before.
+  # Register the release and upload its sourcemaps BEFORE any synthetic traffic
+  # runs. Sourcemaps are applied when an event is processed, so events that
+  # arrive before the upload keep minified stack traces forever.
   # ---------------------------------------------------------------------------
   sentry-release:
     needs: deploy
@@ -91,7 +90,7 @@ jobs:
           name: dist
           path: dist
 
-      - name: Sentry release + deploy
+      - name: Sentry release
         if: ${{ vars.SENTRY_URL != '' && vars.SENTRY_PROJECT != '' }}
         env:
           # Base URL of the Sentry install: trailing slash, no /api/0. Pointing
@@ -121,4 +120,68 @@ jobs:
             --url-prefix '~/${{ github.event.repository.name }}/assets'
 
           sentry-cli releases finalize "$GITHUB_SHA"
+
+  # ---------------------------------------------------------------------------
+  # Synthetic smoke tests against the real deploy. Two purposes: catch a broken
+  # deploy before the release is announced, and drive a real browser so the SDK
+  # loads and the release has telemetry attached to it. A `curl` check would do
+  # neither — no JS execution means no events.
+  # ---------------------------------------------------------------------------
+  smoke:
+    needs: [deploy, sentry-release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npx playwright install --with-deps chromium
+
+      - name: Smoke test the deploy
+        env:
+          SMOKE_URL: ${{ needs.deploy.outputs.page_url }}
+          EXPECTED_RELEASE: ${{ github.sha }}
+          SMOKE_LOADS: 3
+        run: npm run smoke
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # The part this demo exists for. Registering the deploy is what makes Sentry
+  # fire its post-deploy webhook, so it goes last: by the time the webhook
+  # arrives, the bundle is live, its sourcemaps are uploaded, and the release
+  # already has telemetry to look at.
+  #
+  # Runs even when the smoke tests fail — a failed deploy is exactly the case
+  # you want the webhook to tell you about.
+  # ---------------------------------------------------------------------------
+  sentry-deploy:
+    needs: [deploy, smoke]
+    if: ${{ always() && needs.deploy.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Register the deploy
+        if: ${{ vars.SENTRY_URL != '' && vars.SENTRY_PROJECT != '' }}
+        env:
+          SENTRY_URL: ${{ vars.SENTRY_URL }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_DEV_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG || 'sentry' }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+          PAGE_URL: ${{ needs.deploy.outputs.page_url }}
+          SMOKE_RESULT: ${{ needs.smoke.result }}
+        run: |
+          set -euo pipefail
+          curl -sL https://sentry.io/get-cli/ | bash
+
+          echo "smoke tests: $SMOKE_RESULT"
           sentry-cli deploys new --release "$GITHUB_SHA" -e "$ENVIRONMENT" --url "$PAGE_URL"
