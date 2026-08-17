@@ -49,7 +49,7 @@ jobs:
 
       # Handed to the notify job so it can upload sourcemaps against the release.
       - name: Upload build for Sentry
-        if: ${{ vars.SENTRY_URL != '' }}
+        if: ${{ vars.SENTRY_URL != '' && vars.SENTRY_PROJECT != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: dist
@@ -85,14 +85,14 @@ jobs:
       # The built bundle + sourcemaps, so the release has artifacts and stack
       # traces in Sentry point at real source lines instead of minified output.
       - name: Download build
-        if: ${{ vars.SENTRY_URL != '' }}
+        if: ${{ vars.SENTRY_URL != '' && vars.SENTRY_PROJECT != '' }}
         uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist
 
       - name: Sentry release + deploy
-        if: ${{ vars.SENTRY_URL != '' }}
+        if: ${{ vars.SENTRY_URL != '' && vars.SENTRY_PROJECT != '' }}
         env:
           # Base URL of the Sentry install: trailing slash, no /api/0. Pointing
           # at a local devserver means the ngrok host forwarding to it, and the
