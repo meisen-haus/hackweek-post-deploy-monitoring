@@ -70,15 +70,36 @@ full annotated list. The three that matter for the browser SDK:
 | `VITE_RELEASE` | Anything, as long as it matches the release you register. `local-dev`, or `$(git rev-parse HEAD)`. |
 | `VITE_ENVIRONMENT` | `development` |
 
-**The deployed Pages site cannot talk to your devserver.** Pages is served over
-https and a devserver DSN is http, so the browser blocks the request as mixed
-content. Local Sentry means running the app locally too — the deployed site is
-for a cloud DSN.
+A raw `localhost` DSN only works for a locally-served app: Pages is https, so the
+browser blocks an http DSN as mixed content, and GitHub Actions can't route to
+`localhost` at all. Tunnelling the devserver fixes both.
+
+### Full end-to-end against a local devserver, via ngrok
+
+```bash
+ngrok http 8000
+sentry devserver --ngrok=<you>.ngrok.app   # host only, no protocol
+```
+
+`--ngrok` sets `SENTRY_DEVSERVER_NGROK`, which rewrites `system.url-prefix`,
+`ALLOWED_HOSTS` and the CSRF trusted origins to the tunnel host — without it the
+devserver rejects the forwarded requests. Then point both halves at the tunnel:
+
+```bash
+gh variable set SENTRY_URL --body 'https://<you>.ngrok.app/'   # trailing slash
+gh variable set SENTRY_DSN --body 'https://<key>@<you>.ngrok.app/<project_id>'
+gh variable set SENTRY_PROJECT --body '<project_slug>'
+gh secret   set SENTRY_DEV_TOKEN
+```
+
+Now the deployed Pages site reports events to your local Sentry through the
+tunnel, and the workflow's release/deploy step and webhook POST reach it too.
+The ngrok host changes every restart on the free tier, so these are variables
+rather than anything hardcoded.
 
 ### Firing the deploy webhook locally
 
-GitHub Actions can't reach `localhost`, so the CI notify job has a local
-counterpart:
+If you'd rather not tunnel, the CI notify job has a local counterpart:
 
 ```bash
 ./scripts/notify-deploy.sh
@@ -109,10 +130,11 @@ variable is unset, so the app deploys even with nothing configured.
 
 | Setting | Kind | Purpose |
 | --- | --- | --- |
-| `SENTRY_DSN` | variable (or secret) | Client DSN baked into the bundle. Must be a reachable https DSN — a `localhost` devserver DSN will not work from the deployed site. Without it, no telemetry. |
-| `SENTRY_ORG` | variable | Org slug. Enables the Sentry release/deploy step. |
+| `SENTRY_DSN` | variable (or secret) | Client DSN baked into the bundle. Must be reachable over https from the deployed site — sentry.io, or your ngrok host. Without it, no telemetry. |
+| `SENTRY_URL` | variable | Base URL of the Sentry install: **trailing slash, no `/api/0`**. Enables the release/deploy step. `https://<you>.ngrok.app/` for a devserver. |
+| `SENTRY_ORG` | variable | Org slug. Defaults to `sentry`. |
 | `SENTRY_PROJECT` | variable | Project slug for the release. |
-| `SENTRY_AUTH_TOKEN` | secret | Auth token with `project:releases` scope. |
+| `SENTRY_DEV_TOKEN` | secret | Auth token with `project:releases`. From `/settings/account/api/auth-tokens/` on whichever install `SENTRY_URL` points at. |
 | `DEPLOY_WEBHOOK_URL` | variable | Endpoint the notify job POSTs to. |
 | `DEPLOY_WEBHOOK_TOKEN` | secret | Optional; sent as `Authorization: Bearer …`. |
 
