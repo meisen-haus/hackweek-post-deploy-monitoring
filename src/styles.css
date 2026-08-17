@@ -1,0 +1,139 @@
+:root {
+  --bg: #16181d;
+  --panel: #1e2128;
+  --panel-alt: #23262e;
+  --border: #313641;
+  --text: #eceef2;
+  --muted: #9aa1af;
+  --on-time: #4ec9a8;
+  --boarding: #6aa9ff;
+  --delayed: #f0a35e;
+  --error: #f07171;
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 3rem 1.25rem;
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 1.6rem;
+  letter-spacing: 0.04em;
+}
+
+.subtitle {
+  margin: 0.35rem 0 2rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.board {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 4.5rem 1fr 5.5rem 4rem 6rem;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.85rem 1rem;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+
+.row:nth-child(even) {
+  background: var(--panel-alt);
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.flight {
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.route {
+  color: var(--text);
+}
+
+.gate,
+.time {
+  color: var(--muted);
+}
+
+.status-pill {
+  justify-self: end;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border: 1px solid currentcolor;
+}
+
+.status-on-time {
+  color: var(--on-time);
+}
+
+.status-boarding {
+  color: var(--boarding);
+}
+
+.status-delayed {
+  color: var(--delayed);
+}
+
+.status {
+  margin: 0;
+  padding: 1.25rem 1rem;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.status-error {
+  color: var(--error);
+}
+
+.app-footer {
+  margin-top: 1.25rem;
+}
+
+.build-info {
+  color: var(--muted);
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+}
+
+@media (max-width: 40rem) {
+  .row {
+    grid-template-columns: 4rem 1fr auto;
+    row-gap: 0.35rem;
+  }
+
+  .gate,
+  .time {
+    grid-column: 2;
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "updatedAt": "2026-08-17T18:00:00Z",
+  "departures": [
+    {
+      "id": "UA482",
+      "destination": "San Francisco",
+      "gate": "B12",
+      "scheduled": "18:40",
+      "status": "on-time"
+    },
+    {
+      "id": "AC118",
+      "destination": "Vancouver",
+      "gate": "C4",
+      "scheduled": "18:55",
+      "status": "boarding"
+    },
+    {
+      "id": "DL2210",
+      "destination": "Atlanta",
+      "gate": "A7",
+      "scheduled": "19:05",
+      "status": "delayed"
+    },
+    {
+      "id": "WS631",
+      "destination": "Calgary",
+      "gate": "C19",
+      "scheduled": "19:20",
+      "status": "on-time"
+    },
+    {
+      "id": "AA904",
+      "destination": "Dallas",
+      "gate": "B3",
+      "scheduled": "19:45",
+      "status": "on-time"
+    },
+    {
+      "id": "BA96",
+      "destination": "London",
+      "gate": "D1",
+      "scheduled": "20:10",
+      "status": "on-time"
+    },
+    {
+      "id": "AF347",
+      "destination": "Paris",
+      "gate": "D6",
+      "scheduled": "20:30",
+      "status": "delayed"
+    },
+    {
+      "id": "LH473",
+      "destination": "Frankfurt",
+      "gate": "D9",
+      "scheduled": "20:55",
+      "status": "on-time"
+    }
+  ]
+}

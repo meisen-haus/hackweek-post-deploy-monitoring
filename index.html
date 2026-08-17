@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Flight Board</title>
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <main class="app">
+      <header class="app-header">
+        <h1>Flight Board</h1>
+        <p class="subtitle">Departures for the next few hours.</p>
+      </header>
+
+      <section id="board" class="board" aria-live="polite">
+        <p class="status">Loading departures&hellip;</p>
+      </section>
+
+      <footer class="app-footer">
+        <span id="build-info" class="build-info"></span>
+      </footer>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,126 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Needed by actions/deploy-pages.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; a newer push supersedes an in-flight one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  ENVIRONMENT: production
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build
+        env:
+          # The DSN is public by design (it ships in the bundle); a repo variable
+          # is fine, a secret works too.
+          VITE_SENTRY_DSN: ${{ vars.SENTRY_DSN || secrets.SENTRY_DSN }}
+          VITE_RELEASE: ${{ github.sha }}
+          VITE_ENVIRONMENT: ${{ env.ENVIRONMENT }}
+        run: npm run build
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  # ---------------------------------------------------------------------------
+  # The part this demo exists for: once the new code is actually live, tell
+  # Sentry which release is deployed where, then hand off to the post-deploy
+  # webhook so Sentry can watch the release for new errors and regressions.
+  # ---------------------------------------------------------------------------
+  notify-deploy:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so Sentry can associate commits with the release.
+          fetch-depth: 0
+
+      - name: Create Sentry release and deploy
+        if: ${{ vars.SENTRY_ORG != '' }}
+        uses: getsentry/action-release@v3
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+        with:
+          version: ${{ github.sha }}
+          environment: ${{ env.ENVIRONMENT }}
+          set_commits: auto
+
+      - name: Notify post-deploy webhook
+        if: ${{ vars.DEPLOY_WEBHOOK_URL != '' }}
+        env:
+          WEBHOOK_URL: ${{ vars.DEPLOY_WEBHOOK_URL }}
+          WEBHOOK_TOKEN: ${{ secrets.DEPLOY_WEBHOOK_TOKEN }}
+          PAGE_URL: ${{ needs.deploy.outputs.page_url }}
+        run: |
+          set -euo pipefail
+
+          payload=$(jq -n \
+            --arg version "$GITHUB_SHA" \
+            --arg environment "$ENVIRONMENT" \
+            --arg url "$PAGE_URL" \
+            --arg ref "$GITHUB_REF_NAME" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg actor "$GITHUB_ACTOR" \
+            --arg run_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{
+               version: $version,
+               environment: $environment,
+               url: $url,
+               ref: $ref,
+               repository: $repository,
+               deployed_by: $actor,
+               workflow_run: $run_url
+             }')
+
+          echo "$payload"
+
+          auth=()
+          if [ -n "${WEBHOOK_TOKEN:-}" ]; then
+            auth=(--header "Authorization: Bearer $WEBHOOK_TOKEN")
+          fi
+
+          curl --fail-with-body --silent --show-error \
+            --request POST "$WEBHOOK_URL" \
+            --header 'Content-Type: application/json' \
+            "${auth[@]}" \
+            --data "$payload"
