@@ -14,14 +14,18 @@ the regression the new release introduced.
 ```
 push/merge to main
   └─ .github/workflows/deploy.yml
-       ├─ build     → vite build, release stamped with github.sha
-       ├─ deploy    → GitHub Pages
-       └─ notify    → Sentry release + deploy, then POST to the deploy webhook
+       ├─ build           → vite build, release stamped with github.sha
+       ├─ deploy          → GitHub Pages
+       └─ sentry-release  → sentry-cli releases new / sourcemaps / deploys new
+                                    ↓
+                            Sentry fires the post-deploy webhook
 ```
 
-The last job is the point of the demo. Nothing tells Sentry that a deploy
-happened until the new bundle is actually serving traffic — so the notify job
-runs *after* `actions/deploy-pages`, and only then does the webhook fire.
+The webhook is not sent by CI — CI only registers the deploy, and **Sentry** emits
+the webhook off the back of that. Which means the ordering matters: nothing tells
+Sentry a deploy happened until the new bundle is actually serving traffic, so
+`sentry-release` runs *after* `actions/deploy-pages`. Registering the deploy
+first would fire the webhook while the old bundle was still live.
 
 ## Running the demo
 
@@ -30,8 +34,8 @@ runs *after* `actions/deploy-pages`, and only then does the webhook fire.
    milliseconds and the release is clean.
 2. **Merge the regression PR** (`feat/gate-change-highlights`). It looks like an
    ordinary feature branch and merges cleanly.
-3. **Watch the deploy.** The workflow builds, publishes to Pages, then notifies
-   the webhook with the new release SHA.
+3. **Watch the deploy.** The workflow builds, publishes to Pages, then registers
+   the release and deploy — and Sentry fires the post-deploy webhook.
 4. **Watch Sentry.** The new release immediately produces:
    - an unhandled `SyntaxError` on every page load, and
    - a `pageload` transaction several seconds slower than the previous release,
@@ -93,23 +97,23 @@ gh secret   set SENTRY_DEV_TOKEN
 ```
 
 Now the deployed Pages site reports events to your local Sentry through the
-tunnel, and the workflow's release/deploy step and webhook POST reach it too.
-The ngrok host changes every restart on the free tier, so these are variables
-rather than anything hardcoded.
+tunnel, and the workflow's release/deploy step reaches it too. The ngrok host
+changes every restart on the free tier, so these are variables rather than
+anything hardcoded.
 
-### Firing the deploy webhook locally
+### Triggering the webhook locally
 
-If you'd rather not tunnel, the CI notify job has a local counterpart:
+If you'd rather not tunnel, the CI `sentry-release` job has a local counterpart:
 
 ```bash
-./scripts/notify-deploy.sh
+npm run build
+./scripts/register-deploy.sh
 ```
 
-It registers the release and a deploy against `SENTRY_URL` via `sentry-cli`,
-then POSTs the same payload the workflow sends to `DEPLOY_WEBHOOK_URL`. Set
-`DEPLOY_WEBHOOK_URL=http://localhost:8000/<your-webhook-path>` in `.env.local`.
-Both halves are skipped when their variables are unset, so you can run just the
-webhook POST if that's all you're testing.
+It registers the release, uploads sourcemaps, and creates the deploy against
+`SENTRY_URL` via `sentry-cli`. The deploy is the trigger — Sentry sends the
+post-deploy webhook from there, so this exercises the webhook end to end without
+GitHub Actions involved at all.
 
 ### Reproducing the regression locally
 
@@ -135,32 +139,31 @@ variable is unset, so the app deploys even with nothing configured.
 | `SENTRY_ORG` | variable | Org slug. Defaults to `sentry`. |
 | `SENTRY_PROJECT` | variable | Project slug for the release. |
 | `SENTRY_DEV_TOKEN` | secret | Auth token with `project:releases`. From `/settings/account/api/auth-tokens/` on whichever install `SENTRY_URL` points at. |
-| `DEPLOY_WEBHOOK_URL` | variable | Endpoint the notify job POSTs to. |
-| `DEPLOY_WEBHOOK_TOKEN` | secret | Optional; sent as `Authorization: Bearer …`. |
 
 ```bash
 gh variable set SENTRY_DSN --body 'https://…'
-gh variable set DEPLOY_WEBHOOK_URL --body 'https://…'
-gh secret set SENTRY_AUTH_TOKEN
+gh variable set SENTRY_URL --body 'https://…/'
+gh secret set SENTRY_DEV_TOKEN
 ```
 
-### Webhook payload
+Nothing here configures the webhook itself — that is set up on the Sentry side,
+against the project this workflow registers deploys for.
 
-```json
-{
-  "version": "<commit sha, matches the Sentry release>",
-  "environment": "production",
-  "url": "https://meisen-haus.github.io/hackweek-post-deploy-monitoring/",
-  "ref": "main",
-  "repository": "meisen-haus/hackweek-post-deploy-monitoring",
-  "deployed_by": "<github actor>",
-  "workflow_run": "<url of the run that deployed it>"
-}
-```
+### What the deploy carries
 
-`version` is the join key: it is the same value as the Sentry release and the
-`release` tag on every event the deployed bundle sends. Adjust the payload in
-`.github/workflows/deploy.yml` to match the shape your endpoint expects.
+The `sentry-release` job registers a deploy with these attributes, which are what
+the webhook has to work with:
+
+| Attribute | Value |
+| --- | --- |
+| release version | `github.sha` — the commit that produced the bundle |
+| environment | `production` |
+| url | the Pages URL, from `actions/deploy-pages` |
+| commits | associated via `set-commits --auto` when the repo is linked in Sentry |
+
+The release version is the join key: the same value is the `release` tag on every
+event the deployed bundle sends, so a webhook consumer can go straight from
+"deploy happened" to "errors and transactions belonging to that deploy".
 
 ## Pages setup (one time)
 
