@@ -50,11 +50,57 @@ npm run preview  # serve the production build
 ```
 
 Without `VITE_SENTRY_DSN` the app still runs; telemetry is skipped and logs a
-note to the console. To exercise telemetry locally:
+note to the console. Note that Vite *inlines* the DSN at build time, so an unset
+DSN makes `Sentry.init` dead code and the SDK is tree-shaken out entirely
+(279 kB → 33 kB bundle). No DSN at build time means no telemetry, full stop.
+
+## Pointing the demo at a local Sentry devserver
 
 ```bash
-VITE_SENTRY_DSN='https://…@….ingest.sentry.io/…' npm run dev
+cp .env.example .env.local   # fill in the DSN, org, project, token, webhook URL
+npm run dev                  # http://localhost:5173/hackweek-post-deploy-monitoring/
 ```
+
+Everything is driven by `.env.local` (gitignored); see `.env.example` for the
+full annotated list. The three that matter for the browser SDK:
+
+| Variable | Local devserver value |
+| --- | --- |
+| `VITE_SENTRY_DSN` | `http://<public_key>@localhost:8000/<project_id>` — copy verbatim from Settings → Client Keys (DSN). `http`, not `https`. |
+| `VITE_RELEASE` | Anything, as long as it matches the release you register. `local-dev`, or `$(git rev-parse HEAD)`. |
+| `VITE_ENVIRONMENT` | `development` |
+
+**The deployed Pages site cannot talk to your devserver.** Pages is served over
+https and a devserver DSN is http, so the browser blocks the request as mixed
+content. Local Sentry means running the app locally too — the deployed site is
+for a cloud DSN.
+
+### Firing the deploy webhook locally
+
+GitHub Actions can't reach `localhost`, so the CI notify job has a local
+counterpart:
+
+```bash
+./scripts/notify-deploy.sh
+```
+
+It registers the release and a deploy against `SENTRY_URL` via `sentry-cli`,
+then POSTs the same payload the workflow sends to `DEPLOY_WEBHOOK_URL`. Set
+`DEPLOY_WEBHOOK_URL=http://localhost:8000/<your-webhook-path>` in `.env.local`.
+Both halves are skipped when their variables are unset, so you can run just the
+webhook POST if that's all you're testing.
+
+### Reproducing the regression locally
+
+```bash
+git checkout feat/gate-change-highlights
+npm run dev
+```
+
+Leave `VITE_FEATURE_FLAGS` **unset** — that unset variable *is* the bug. The
+board still renders, ~3s late, and throws an uncaught `SyntaxError` on every
+load. Setting `VITE_FEATURE_FLAGS={"gateHighlights":true,"countdownSeconds":8}`
+fixes the error but not the slowdown.
 
 ## Repository configuration
 
@@ -63,7 +109,7 @@ variable is unset, so the app deploys even with nothing configured.
 
 | Setting | Kind | Purpose |
 | --- | --- | --- |
-| `SENTRY_DSN` | variable (or secret) | Client DSN baked into the bundle. Without it, no telemetry. |
+| `SENTRY_DSN` | variable (or secret) | Client DSN baked into the bundle. Must be a reachable https DSN — a `localhost` devserver DSN will not work from the deployed site. Without it, no telemetry. |
 | `SENTRY_ORG` | variable | Org slug. Enables the Sentry release/deploy step. |
 | `SENTRY_PROJECT` | variable | Project slug for the release. |
 | `SENTRY_AUTH_TOKEN` | secret | Auth token with `project:releases` scope. |
