@@ -1,12 +1,9 @@
 import './styles.css';
 
-import {fetchDepartures, fetchGateChange} from './api';
+import {fetchDepartures} from './api';
 import {toDisplayDepartures} from './enrich';
-import {startGateWatcher} from './gate-watcher';
-import {buildGateHistory} from './history';
 import {renderBoard, renderBuildInfo, renderError} from './render';
 import {initTelemetry, Sentry} from './sentry';
-import type {GateChange} from './types';
 
 initTelemetry();
 
@@ -24,23 +21,8 @@ async function boot(): Promise<void> {
       () => fetchDepartures()
     );
 
-    const gateChanges = await Sentry.startSpan(
-      {name: 'load gate changes', op: 'app.load'},
-      async () => {
-        const changes: GateChange[] = [];
-
-        // One request per flight, in order, so the board never shows a gate
-        // change out of sequence.
-        for (const departure of payload.departures) {
-          changes.push(await fetchGateChange(departure.id));
-        }
-
-        return changes;
-      }
-    );
-
     const rows = Sentry.startSpan({name: 'prepare rows', op: 'app.transform'}, () =>
-      toDisplayDepartures(payload.departures, buildGateHistory(), gateChanges)
+      toDisplayDepartures(payload.departures)
     );
 
     Sentry.startSpan({name: 'render board', op: 'ui.render'}, span => {
@@ -69,9 +51,6 @@ async function boot(): Promise<void> {
     });
     Sentry.captureException(error);
   }
-
-  // Highlights start after first paint so they cannot delay the board.
-  requestAnimationFrame(() => startGateWatcher(board));
 }
 
 void boot();

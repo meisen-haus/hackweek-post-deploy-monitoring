@@ -18,25 +18,15 @@ export function renderBoard(root: HTMLElement, departures: DisplayDeparture[]): 
       gate.className = 'gate';
       gate.textContent = `Gate ${departure.gate}`;
 
-      if (departure.gateChanged) {
-        gate.classList.add('gate-changed');
-        gate.title = 'Gate changed recently';
-      }
-
       const time = document.createElement('span');
       time.className = 'time';
       time.textContent = departure.scheduled;
-
-      const congestion = document.createElement('span');
-      congestion.className = 'congestion';
-      congestion.title = 'Gate congestion index';
-      congestion.textContent = `${departure.congestion}`;
 
       const status = document.createElement('span');
       status.className = `status-pill status-${departure.status}`;
       status.textContent = departure.statusLabel;
 
-      row.append(flight, route, gate, time, congestion, status);
+      row.append(flight, route, gate, time, status);
       return row;
     })
   );
