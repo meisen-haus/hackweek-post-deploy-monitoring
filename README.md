@@ -193,7 +193,7 @@ the webhook has to work with:
 
 | Attribute | Value |
 | --- | --- |
-| release version | `github.sha` — the commit that produced the bundle |
+| release version | `<github.sha>+<run_number>` — the commit that produced the bundle, plus the run that deployed it |
 | environment | `production` |
 | url | the Pages URL, from `actions/deploy-pages` |
 | commits | associated via `set-commits --auto` when the repo is linked in Sentry |
@@ -202,6 +202,14 @@ the webhook has to work with:
 The release version is the join key: the same value is the `release` tag on every
 event the deployed bundle sends, so a webhook consumer can go straight from
 "deploy happened" to "errors and transactions belonging to that deploy".
+
+The `+<run_number>` suffix guarantees **every deploy is a net-new release**.
+Without it, re-running the workflow on an unchanged commit reuses the existing
+release — `POST /releases/` answers `208 Already Reported` — and the new deploy
+attaches to a release that already carries telemetry from the previous run,
+which ruins any "this release introduced it" comparison. The SHA stays as the
+prefix, so a release is still traceable to its code and the short SHA still
+shows in the page footer.
 
 ## Pages setup (one time)
 

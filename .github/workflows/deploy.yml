@@ -18,6 +18,11 @@ concurrency:
 
 env:
   ENVIRONMENT: production
+  # Release identity. The run number makes every deploy a distinct release, so
+  # re-running the workflow on an unchanged commit still produces a net-new
+  # release rather than attaching a second deploy to the existing one. The
+  # commit SHA stays as the prefix, so a release is still traceable to its code.
+  RELEASE: ${{ github.sha }}+${{ github.run_number }}
 
 jobs:
   build:
@@ -40,7 +45,7 @@ jobs:
           # The DSN is public by design (it ships in the bundle); a repo variable
           # is fine, a secret works too.
           VITE_SENTRY_DSN: ${{ vars.SENTRY_DSN || secrets.SENTRY_DSN }}
-          VITE_RELEASE: ${{ github.sha }}
+          VITE_RELEASE: ${{ env.RELEASE }}
           VITE_ENVIRONMENT: ${{ env.ENVIRONMENT }}
         run: npm run build
 
@@ -63,18 +68,19 @@ jobs:
           set -euo pipefail
           curl -sL https://sentry.io/get-cli/ | bash
 
-          sentry-cli releases new "$GITHUB_SHA"
+          sentry-cli releases new "$RELEASE"
 
           sentry-cli sourcemaps inject dist
-          sentry-cli sourcemaps upload dist --release "$GITHUB_SHA"
+          sentry-cli sourcemaps upload dist --release "$RELEASE"
 
-          # Commit association needs this repo linked in the org's GitHub
-          # integration. A dev org may have none, so warn instead of failing the
-          # deploy over it.
-          sentry-cli releases set-commits "$GITHUB_SHA" --auto \
-            || echo "::warning::set-commits --auto failed; release has no commits"
+          # The release name is no longer the bare SHA, so name the commit
+          # explicitly rather than relying on --auto inferring it. Association
+          # needs this repo linked in the org's GitHub integration; a dev org may
+          # have none, so warn instead of failing the deploy over it.
+          sentry-cli releases set-commits "$RELEASE" --commit "$GITHUB_REPOSITORY@$GITHUB_SHA" \
+            || echo "::warning::set-commits failed; release $RELEASE has no commits"
 
-          sentry-cli releases finalize "$GITHUB_SHA"
+          sentry-cli releases finalize "$RELEASE"
 
       - uses: actions/configure-pages@v5
 
@@ -119,7 +125,7 @@ jobs:
       - name: Smoke test the deploy
         env:
           SMOKE_URL: ${{ needs.deploy.outputs.page_url }}
-          EXPECTED_RELEASE: ${{ github.sha }}
+          EXPECTED_RELEASE: ${{ env.RELEASE }}
           SMOKE_LOADS: 3
         run: npm run smoke
 
@@ -158,7 +164,7 @@ jobs:
           curl -sL https://sentry.io/get-cli/ | bash
 
           echo "smoke tests: $SMOKE_RESULT"
-          sentry-cli deploys new --release "$GITHUB_SHA" -e "$ENVIRONMENT" --url "$PAGE_URL"
+          sentry-cli deploys new --release "$RELEASE" -e "$ENVIRONMENT" --url "$PAGE_URL"
 
   # ---------------------------------------------------------------------------
   # A second, smaller traffic pass AFTER the deploy is registered.
@@ -189,6 +195,6 @@ jobs:
       - name: Generate post-deploy traffic
         env:
           SMOKE_URL: ${{ needs.deploy.outputs.page_url }}
-          EXPECTED_RELEASE: ${{ github.sha }}
+          EXPECTED_RELEASE: ${{ env.RELEASE }}
           SMOKE_LOADS: 2
         run: npm run smoke
