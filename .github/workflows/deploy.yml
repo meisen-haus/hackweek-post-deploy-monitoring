@@ -103,6 +103,7 @@ jobs:
   smoke:
     needs: deploy
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -113,7 +114,7 @@ jobs:
 
       - run: npm ci
 
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install chromium --only-shell
 
       - name: Smoke test the deploy
         env:
@@ -172,6 +173,7 @@ jobs:
     needs: [deploy, sentry-deploy]
     if: ${{ always() && needs.deploy.result == 'success' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -182,7 +184,7 @@ jobs:
 
       - run: npm ci
 
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install chromium --only-shell
 
       - name: Generate post-deploy traffic
         env:
