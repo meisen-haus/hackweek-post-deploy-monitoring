@@ -158,3 +158,35 @@ jobs:
 
           echo "smoke tests: $SMOKE_RESULT"
           sentry-cli deploys new --release "$GITHUB_SHA" -e "$ENVIRONMENT" --url "$PAGE_URL"
+
+  # ---------------------------------------------------------------------------
+  # A second, smaller traffic pass AFTER the deploy is registered.
+  #
+  # The pre-deploy smoke run guarantees the release is not empty when the
+  # webhook fires, but all of its telemetry is timestamped *before* the deploy.
+  # A consumer that asks "what arrived since this deploy?" would correctly find
+  # nothing. This pass puts traffic on the other side of the deploy timestamp so
+  # both a release-scoped and a time-window query return data.
+  # ---------------------------------------------------------------------------
+  post-deploy-traffic:
+    needs: [deploy, sentry-deploy]
+    if: ${{ always() && needs.deploy.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npx playwright install --with-deps chromium
+
+      - name: Generate post-deploy traffic
+        env:
+          SMOKE_URL: ${{ needs.deploy.outputs.page_url }}
+          EXPECTED_RELEASE: ${{ github.sha }}
+          SMOKE_LOADS: 2
+        run: npm run smoke
