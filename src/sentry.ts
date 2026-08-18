@@ -1,6 +1,18 @@
 import * as Sentry from '@sentry/browser';
 
 /**
+ * Synthetic organization the feedback is attributed to. A fresh id per page
+ * load, so submissions spread across many orgs instead of piling onto one.
+ *
+ * `Math.random()` is [0, 1), so this lands in 100000–999999 — always six
+ * digits, never a leading zero. To keep a visitor on one org across reloads,
+ * read it from sessionStorage here instead of generating it fresh.
+ */
+function organizationId(): string {
+  return String(Math.floor(100_000 + Math.random() * 900_000));
+}
+
+/**
  * Telemetry setup. The DSN and release are injected at build time by the deploy
  * workflow so that every error, span and log is attributed to the exact commit
  * that produced it — that attribution is what the post-deploy webhook relies on.
@@ -38,6 +50,9 @@ export function initTelemetry(): void {
         triggerLabel: 'Report a problem',
         formTitle: 'Report a problem',
         submitButtonLabel: 'Send report',
+        // Merged into the feedback event by the integration, so the tag lands
+        // on submitted feedback only — not on errors or transactions.
+        tags: {organization: organizationId()},
       }),
     ],
 
