@@ -18,10 +18,12 @@ concurrency:
 
 env:
   ENVIRONMENT: production
-  # Release identity. The run number makes every deploy a distinct release, so
-  # re-running the workflow on an unchanged commit still produces a net-new
-  # release rather than attaching a second deploy to the existing one. The
-  # commit SHA stays as the prefix, so a release is still traceable to its code.
+  # Release identity. Nothing registers releases on this branch — the release
+  # exists in Sentry purely as the `release` tag on the events the bundle sends.
+  # The run number still makes every deploy a distinct release, so re-running
+  # the workflow on an unchanged commit produces a net-new one instead of
+  # piling telemetry onto the previous run's. The commit SHA stays as the
+  # prefix, so a release is still traceable to its code.
   RELEASE: ${{ github.sha }}+${{ github.run_number }}
 
 jobs:
@@ -29,9 +31,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          # Full history so Sentry can associate commits with the release.
-          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -43,45 +42,12 @@ jobs:
       - name: Build
         env:
           # The DSN is public by design (it ships in the bundle); a repo variable
-          # is fine, a secret works too.
+          # is fine, a secret works too. Unset means no telemetry at all — Vite
+          # inlines this at build time, so the SDK is tree-shaken out entirely.
           VITE_SENTRY_DSN: ${{ vars.SENTRY_DSN || secrets.SENTRY_DSN }}
           VITE_RELEASE: ${{ env.RELEASE }}
           VITE_ENVIRONMENT: ${{ env.ENVIRONMENT }}
         run: npm run build
-
-      # Runs BEFORE the Pages upload on purpose. `sourcemaps inject` stamps debug
-      # IDs into dist/, and those files are what has to ship — inject after the
-      # upload and the deployed bundle carries no IDs, leaving stack traces to be
-      # matched by URL guesswork instead.
-      - name: Sentry release and sourcemaps
-        if: ${{ vars.SENTRY_URL != '' && vars.SENTRY_PROJECT != '' }}
-        env:
-          # Base URL of the Sentry install: trailing slash, no /api/0. Pointing
-          # at a local devserver means the ngrok host forwarding to it, and the
-          # devserver has to be started with `--ngrok=<host>` so its
-          # system.url-prefix and ALLOWED_HOSTS match.
-          SENTRY_URL: ${{ vars.SENTRY_URL }}
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_DEV_TOKEN }}
-          SENTRY_ORG: ${{ vars.SENTRY_ORG || 'sentry' }}
-          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
-        run: |
-          set -euo pipefail
-          curl -sL https://sentry.io/get-cli/ | bash
-
-          sentry-cli releases new "$RELEASE"
-
-          sentry-cli sourcemaps inject dist
-          sentry-cli sourcemaps upload dist --release "$RELEASE"
-
-          # --auto works off the checked-out git history (hence fetch-depth: 0)
-          # and does not care that the release name is no longer the bare SHA.
-          # Naming the repo explicitly instead fails with "Unknown repo" unless
-          # it is registered in the org, which a dev org generally will not be.
-          # Warn rather than failing the deploy over missing commits.
-          sentry-cli releases set-commits "$RELEASE" --auto \
-            || echo "::warning::set-commits failed; release $RELEASE has no commits"
-
-          sentry-cli releases finalize "$RELEASE"
 
       - uses: actions/configure-pages@v5
 
@@ -103,9 +69,9 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Synthetic smoke tests against the real deploy. Two purposes: catch a broken
-  # deploy before the release is announced, and drive a real browser so the SDK
-  # loads and the release has telemetry attached to it. A `curl` check would do
-  # neither — no JS execution means no events.
+  # deploy, and drive a real browser so the SDK loads and the release has
+  # telemetry attached to it. A `curl` check would do neither — no JS execution
+  # means no events.
   # ---------------------------------------------------------------------------
   smoke:
     needs: deploy
@@ -136,66 +102,3 @@ jobs:
           name: playwright-report
           path: playwright-report/
           retention-days: 7
-
-  # ---------------------------------------------------------------------------
-  # The part this demo exists for. Registering the deploy is what makes Sentry
-  # fire its post-deploy webhook, so it goes last: by the time the webhook
-  # arrives, the bundle is live, its sourcemaps are uploaded, and the release
-  # already has telemetry to look at.
-  #
-  # Runs even when the smoke tests fail — a failed deploy is exactly the case
-  # you want the webhook to tell you about.
-  # ---------------------------------------------------------------------------
-  sentry-deploy:
-    needs: [deploy, smoke]
-    if: ${{ always() && needs.deploy.result == 'success' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Register the deploy
-        if: ${{ vars.SENTRY_URL != '' && vars.SENTRY_PROJECT != '' }}
-        env:
-          SENTRY_URL: ${{ vars.SENTRY_URL }}
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_DEV_TOKEN }}
-          SENTRY_ORG: ${{ vars.SENTRY_ORG || 'sentry' }}
-          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
-          PAGE_URL: ${{ needs.deploy.outputs.page_url }}
-          SMOKE_RESULT: ${{ needs.smoke.result }}
-        run: |
-          set -euo pipefail
-          curl -sL https://sentry.io/get-cli/ | bash
-
-          echo "smoke tests: $SMOKE_RESULT"
-          sentry-cli deploys new --release "$RELEASE" -e "$ENVIRONMENT" --url "$PAGE_URL"
-
-  # ---------------------------------------------------------------------------
-  # A second, smaller traffic pass AFTER the deploy is registered.
-  #
-  # The pre-deploy smoke run guarantees the release is not empty when the
-  # webhook fires, but all of its telemetry is timestamped *before* the deploy.
-  # A consumer that asks "what arrived since this deploy?" would correctly find
-  # nothing. This pass puts traffic on the other side of the deploy timestamp so
-  # both a release-scoped and a time-window query return data.
-  # ---------------------------------------------------------------------------
-  post-deploy-traffic:
-    needs: [deploy, sentry-deploy]
-    if: ${{ always() && needs.deploy.result == 'success' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - run: npm ci
-
-      - run: npx playwright install chromium --only-shell
-
-      - name: Generate post-deploy traffic
-        env:
-          SMOKE_URL: ${{ needs.deploy.outputs.page_url }}
-          EXPECTED_RELEASE: ${{ env.RELEASE }}
-          SMOKE_LOADS: 2
-        run: npm run smoke
