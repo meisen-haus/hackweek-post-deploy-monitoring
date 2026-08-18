@@ -4,11 +4,6 @@ A deliberately tiny static app that exists to demonstrate Sentry's **post-deploy
 webhook**: merge a PR, watch it deploy to GitHub Pages, and watch Sentry pick up
 the regression the new release introduced.
 
-> **Branch note.** This branch (`demo/no-deploy-steps`) reports to a Sentry SaaS
-> project instead of a local devserver, so `SENTRY_URL` is optional and there is
-> no ngrok tunnelling to set up. It also drops every synthetic-traffic job and
-> `scripts/register-deploy.sh` — see [Differences from `main`](#differences-from-main).
-
 - **Live:** https://meisen-haus.github.io/hackweek-post-deploy-monitoring/
 - **Stack:** Vite + TypeScript, no framework, one static JSON "API"
 - **Telemetry:** `@sentry/browser` with tracing and session replay, release =
@@ -66,7 +61,7 @@ DSN makes `Sentry.init` dead code and the SDK is tree-shaken out entirely
 ## Pointing the demo at Sentry
 
 ```bash
-cp .env.example .env.local   # already carries this branch's DSN
+cp .env.example .env.local   # already carries the project's DSN
 npm run dev                  # http://localhost:5173/hackweek-post-deploy-monitoring/
 ```
 
@@ -79,8 +74,8 @@ that matter for the browser SDK:
 | `VITE_RELEASE` | Anything, as long as it matches the release CI registers. `local-dev`, or `$(git rev-parse HEAD)`. |
 | `VITE_ENVIRONMENT` | `development` |
 
-Releases and deploys are registered from CI only on this branch. There is no
-local `register-deploy.sh` counterpart — to fire the webhook, push and let the
+Releases and deploys are registered from CI only. There is no local
+`register-deploy.sh` counterpart — to fire the webhook, push and let the
 workflow run.
 
 ### Reproducing the regression locally
@@ -146,21 +141,10 @@ which ruins any "this release introduced it" comparison. The SHA stays as the
 prefix, so a release is still traceable to its code and the short SHA still
 shows in the page footer.
 
-## Differences from `main`
+## No synthetic traffic
 
-| | `main` | this branch |
-| --- | --- | --- |
-| Sentry target | local devserver via ngrok | SaaS project `4511933085188096` |
-| `SENTRY_URL` | required, enables the release step | optional, defaults to `https://sentry.io/` |
-| Token secret | `SENTRY_DEV_TOKEN` | `SENTRY_AUTH_TOKEN` |
-| Step guard | `SENTRY_URL && SENTRY_PROJECT` | `SENTRY_PROJECT` |
-| `smoke` job | yes | **removed** |
-| `post-deploy-traffic` job | yes | **removed** |
-| `scripts/register-deploy.sh` | yes | **removed** |
-
-Dropping both traffic jobs has one consequence worth knowing: **nothing drives a
-browser against the deploy**, so a release has no telemetry at the moment its
-webhook fires. Events show up only once real traffic hits the page, and a webhook
+CI does not drive a browser at the deploy, which has one consequence worth
+knowing: **a release has no telemetry at the moment its webhook fires.** Events show up only once real traffic hits the page, and a webhook
 consumer that reads the release immediately will find it empty. `tests/smoke.spec.ts`
 still works if you want to generate that traffic by hand:
 
