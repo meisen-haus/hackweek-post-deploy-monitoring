@@ -33,11 +33,11 @@ export function buildGateHistory(): GateSample[] {
  */
 export function congestionIndex(departure: Departure, history: GateSample[]): number {
   const scheduledMinute = toMinutes(departure.scheduled);
+  const loadByMinute = averageLoadByMinute(history);
   let weighted = 0;
 
   for (const sample of history) {
-    const window = history.filter(other => Math.abs(other.minute - sample.minute) <= 90);
-    const load = window.reduce((sum, other) => sum + other.passengers, 0) / window.length;
+    const load = loadByMinute.get(sample.minute)!;
 
     const gateMatch = sample.gate === departure.gate ? 1.5 : 0.25;
     const proximity = 1 / (1 + Math.abs(sample.minute - scheduledMinute) / 120);
@@ -46,6 +46,25 @@ export function congestionIndex(departure: Departure, history: GateSample[]): nu
   }
 
   return Math.min(100, Math.round(weighted / history.length));
+}
+
+/**
+ * The ±90-minute window average depends only on a sample's minute-of-day, and
+ * every day shares the same set of minute values. Computing it once per
+ * distinct minute instead of once per sample turns the O(n^2) history.filter()
+ * that used to run inside the loop above into O(n * distinct minutes).
+ */
+function averageLoadByMinute(history: GateSample[]): Map<number, number> {
+  const minutes = new Set(history.map(sample => sample.minute));
+  const loadByMinute = new Map<number, number>();
+
+  for (const minute of minutes) {
+    const window = history.filter(other => Math.abs(other.minute - minute) <= 90);
+    const load = window.reduce((sum, other) => sum + other.passengers, 0) / window.length;
+    loadByMinute.set(minute, load);
+  }
+
+  return loadByMinute;
 }
 
 function toMinutes(scheduled: string): number {
