@@ -73,11 +73,12 @@ jobs:
           sentry-cli sourcemaps inject dist
           sentry-cli sourcemaps upload dist --release "$RELEASE"
 
-          # The release name is no longer the bare SHA, so name the commit
-          # explicitly rather than relying on --auto inferring it. Association
-          # needs this repo linked in the org's GitHub integration; a dev org may
-          # have none, so warn instead of failing the deploy over it.
-          sentry-cli releases set-commits "$RELEASE" --commit "$GITHUB_REPOSITORY@$GITHUB_SHA" \
+          # --auto works off the checked-out git history (hence fetch-depth: 0)
+          # and does not care that the release name is no longer the bare SHA.
+          # Naming the repo explicitly instead fails with "Unknown repo" unless
+          # it is registered in the org, which a dev org generally will not be.
+          # Warn rather than failing the deploy over missing commits.
+          sentry-cli releases set-commits "$RELEASE" --auto \
             || echo "::warning::set-commits failed; release $RELEASE has no commits"
 
           sentry-cli releases finalize "$RELEASE"
