@@ -18,12 +18,10 @@ concurrency:
 
 env:
   ENVIRONMENT: production
-  # Release identity. Nothing registers releases on this branch — the release
-  # exists in Sentry purely as the `release` tag on the events the bundle sends.
-  # The run number still makes every deploy a distinct release, so re-running
-  # the workflow on an unchanged commit produces a net-new one instead of
-  # piling telemetry onto the previous run's. The commit SHA stays as the
-  # prefix, so a release is still traceable to its code.
+  # Release identity. The run number makes every deploy a distinct release, so
+  # re-running the workflow on an unchanged commit still produces a net-new
+  # release rather than attaching a second deploy to the existing one. The
+  # commit SHA stays as the prefix, so a release is still traceable to its code.
   RELEASE: ${{ github.sha }}+${{ github.run_number }}
 
 jobs:
@@ -31,6 +29,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so Sentry can associate commits with the release.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -48,6 +49,37 @@ jobs:
           VITE_RELEASE: ${{ env.RELEASE }}
           VITE_ENVIRONMENT: ${{ env.ENVIRONMENT }}
         run: npm run build
+
+      # Runs BEFORE the Pages upload on purpose. `sourcemaps inject` stamps debug
+      # IDs into dist/, and those files are what has to ship — inject after the
+      # upload and the deployed bundle carries no IDs, leaving stack traces to be
+      # matched by URL guesswork instead.
+      - name: Sentry release and sourcemaps
+        if: ${{ vars.SENTRY_PROJECT != '' }}
+        env:
+          # Defaults to SaaS. Override only to point at a self-hosted install or
+          # a devserver: base URL, trailing slash, no /api/0.
+          SENTRY_URL: ${{ vars.SENTRY_URL || 'https://sentry.io/' }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+        run: |
+          set -euo pipefail
+          curl -sL https://sentry.io/get-cli/ | bash
+
+          sentry-cli releases new "$RELEASE"
+
+          sentry-cli sourcemaps inject dist
+          sentry-cli sourcemaps upload dist --release "$RELEASE"
+
+          # --auto works off the checked-out git history (hence fetch-depth: 0)
+          # and does not care that the release name is no longer the bare SHA.
+          # It needs the repo linked to the org through Sentry's GitHub
+          # integration; warn rather than failing the deploy over missing commits.
+          sentry-cli releases set-commits "$RELEASE" --auto \
+            || echo "::warning::set-commits failed; release $RELEASE has no commits"
+
+          sentry-cli releases finalize "$RELEASE"
 
       - uses: actions/configure-pages@v5
 
@@ -102,3 +134,32 @@ jobs:
           name: playwright-report
           path: playwright-report/
           retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Registering the deploy is what makes Sentry fire its post-deploy webhook, so
+  # it goes last: by the time the webhook arrives, the bundle is live, its
+  # sourcemaps are uploaded, and the release already has telemetry to look at.
+  #
+  # Runs even when the smoke tests fail — a failed deploy is exactly the case
+  # you want the webhook to tell you about.
+  # ---------------------------------------------------------------------------
+  sentry-deploy:
+    needs: [deploy, smoke]
+    if: ${{ always() && needs.deploy.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Register the deploy
+        if: ${{ vars.SENTRY_PROJECT != '' }}
+        env:
+          SENTRY_URL: ${{ vars.SENTRY_URL || 'https://sentry.io/' }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+          PAGE_URL: ${{ needs.deploy.outputs.page_url }}
+          SMOKE_RESULT: ${{ needs.smoke.result }}
+        run: |
+          set -euo pipefail
+          curl -sL https://sentry.io/get-cli/ | bash
+
+          echo "smoke tests: $SMOKE_RESULT"
+          sentry-cli deploys new --release "$RELEASE" -e "$ENVIRONMENT" --url "$PAGE_URL"

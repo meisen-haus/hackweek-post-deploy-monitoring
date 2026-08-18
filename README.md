@@ -1,13 +1,13 @@
 # Flight Board — post-deploy monitoring demo
 
-A deliberately tiny static app: merge a PR, watch it deploy to GitHub Pages, and
-watch Sentry pick up the regression the new release introduced.
+A deliberately tiny static app that exists to demonstrate Sentry's **post-deploy
+webhook**: merge a PR, watch it deploy to GitHub Pages, and watch Sentry pick up
+the regression the new release introduced.
 
-> **Branch note.** This branch (`demo/no-deploy-steps`) omits every deploy-
-> registration step. There is no `sentry-cli`, no release object, no sourcemap
-> upload, and no `deploys new` — so Sentry never fires a post-deploy webhook
-> here. What is left is the app, the Pages deploy, and the synthetic smoke run
-> that puts real telemetry on each build. See `main` for the full webhook demo.
+> **Branch note.** This branch (`demo/no-deploy-steps`) reports to a Sentry SaaS
+> project instead of a local devserver, so `SENTRY_URL` is optional and there is
+> no ngrok tunnelling to set up. It also drops the `post-deploy-traffic` job and
+> `scripts/register-deploy.sh` — see [Differences from `main`](#differences-from-main).
 
 - **Live:** https://meisen-haus.github.io/hackweek-post-deploy-monitoring/
 - **Stack:** Vite + TypeScript, no framework, one static JSON "API"
@@ -19,23 +19,19 @@ watch Sentry pick up the regression the new release introduced.
 ```
 push/merge to main
   └─ .github/workflows/deploy.yml
-       ├─ build   → vite build, DSN + release inlined
-       ├─ deploy  → GitHub Pages
-       └─ smoke   → Playwright against the live site (generates telemetry)
+       ├─ build           → vite build, release, sourcemaps injected + uploaded
+       ├─ deploy          → GitHub Pages
+       ├─ smoke           → Playwright against the live site (generates telemetry)
+       └─ sentry-deploy   → deploys new
                                     ↓
-                       events arrive in Sentry tagged
-                       with the release that produced them
+                            Sentry fires the post-deploy webhook
 ```
 
-The release is never registered as an object in Sentry — it exists only as the
-`release` tag on the events the bundle sends, which Sentry creates implicitly on
-first sight. That is enough to compare one build against the previous one; it is
-not enough for release health, suspect commits, sourcemap resolution, or the
-post-deploy webhook. Those need the steps on `main`.
-
-Because no sourcemaps are uploaded, stack traces in Sentry show the minified
-bundle. `vite build` still emits sourcemaps into `dist/` and Pages serves them,
-so the browser devtools resolve fine — Sentry itself will not.
+The webhook is not sent by CI — CI only registers the deploy, and **Sentry** emits
+the webhook off the back of that. Which means the ordering matters: nothing tells
+Sentry a deploy happened until the new bundle is actually serving traffic, so
+`sentry-deploy` runs *after* `actions/deploy-pages`. Registering the deploy
+first would fire the webhook while the old bundle was still live.
 
 ## Synthetic smoke tests
 
@@ -49,6 +45,9 @@ deploy. Two jobs at once:
   the SDK load and report — a `curl` check would execute no JavaScript and
   produce no events. It loads the page several times so the release has more than
   a single sample behind it.
+
+That second point is why `sentry-deploy` runs *after* this job: by the time your
+webhook fires, the release already has events to look at.
 
 Timings and uncaught errors are **reported to the run summary, not enforced**:
 
@@ -77,15 +76,15 @@ controls how many loads the health pass does.
    milliseconds and the release is clean.
 2. **Merge the regression PR** (`feat/gate-change-highlights`). It looks like an
    ordinary feature branch and merges cleanly.
-3. **Watch the deploy.** The workflow builds, publishes to Pages, and smoke-tests
-   the live site.
+3. **Watch the deploy.** The workflow builds, publishes to Pages, then registers
+   the release and deploy — and Sentry fires the post-deploy webhook.
 4. **Watch Sentry.** The new release immediately produces:
    - an unhandled `SyntaxError` on every page load, and
    - a `pageload` transaction several seconds slower than the previous release,
      with the time attributable to one long task and a request waterfall.
 
-Nothing pushes that at you on this branch — you go look. Filtering by the
-`release` tag is what separates the new build's events from the old one's.
+That "new release + first errors + regressed p75" is exactly the signal the
+post-deploy webhook is meant to act on.
 
 ## Local development
 
@@ -114,8 +113,12 @@ that matter for the browser SDK:
 | Variable | Value |
 | --- | --- |
 | `VITE_SENTRY_DSN` | `https://df43c498197c27d3cc649d36e923422f@o676634.ingest.us.sentry.io/4511933085188096` — copy verbatim from Settings → Client Keys (DSN). |
-| `VITE_RELEASE` | Anything that identifies the build. `local-dev`, or `$(git rev-parse HEAD)`. |
+| `VITE_RELEASE` | Anything, as long as it matches the release CI registers. `local-dev`, or `$(git rev-parse HEAD)`. |
 | `VITE_ENVIRONMENT` | `development` |
+
+Releases and deploys are registered from CI only on this branch. There is no
+local `register-deploy.sh` counterpart — to fire the webhook, push and let the
+workflow run.
 
 ### Reproducing the regression locally
 
@@ -131,41 +134,71 @@ fixes the error but not the slowdown.
 
 ## Repository configuration
 
-One setting, and the app deploys without it — just with no telemetry.
+The workflow degrades gracefully: the release and deploy steps are skipped when
+`SENTRY_PROJECT` is unset, so the app deploys even with nothing configured.
 
 | Setting | Kind | Purpose |
 | --- | --- | --- |
-| `SENTRY_DSN` | variable (or secret) | Client DSN baked into the bundle. Must be reachable over https from the deployed site. Without it, no telemetry. |
+| `SENTRY_DSN` | variable (or secret) | Client DSN baked into the bundle. Without it, no telemetry. |
+| `SENTRY_ORG` | variable | Org slug that owns the project. |
+| `SENTRY_PROJECT` | variable | Project slug. **Enables the release and deploy steps** — unset means both are skipped. |
+| `SENTRY_AUTH_TOKEN` | secret | Org auth token with `project:releases` (and `org:read` for `set-commits --auto`). From Settings → Auth Tokens. |
+| `SENTRY_URL` | variable | *Optional.* Base URL of the Sentry install: **trailing slash, no `/api/0`**. Defaults to `https://sentry.io/`; only set it for self-hosted or a devserver. |
 
 ```bash
 gh variable set SENTRY_DSN --body 'https://df43c498197c27d3cc649d36e923422f@o676634.ingest.us.sentry.io/4511933085188096'
+gh variable set SENTRY_ORG --body '<org-slug>'
+gh variable set SENTRY_PROJECT --body '<project-slug>'
+gh secret   set SENTRY_AUTH_TOKEN
 ```
 
-Repository variables are **repo-wide, not per-branch**, so setting this also
-repoints `main`'s deploys at the same project. If `main` needs to keep reporting
-somewhere else, leave the variable alone and run this branch locally off
-`.env.local` instead.
+Repository variables and secrets are **repo-wide, not per-branch**, so these also
+apply to `main`'s deploys.
 
-`SENTRY_URL`, `SENTRY_ORG`, `SENTRY_PROJECT` and `SENTRY_DEV_TOKEN` are unused on
-this branch — nothing here talks to the Sentry API.
+Nothing here configures the webhook itself — that is set up on the Sentry side,
+against the project this workflow registers deploys for.
 
-### What identifies a build
+### What the deploy carries
+
+The `sentry-deploy` job registers a deploy with these attributes, which are what
+the webhook has to work with:
 
 | Attribute | Value |
 | --- | --- |
 | release version | `<github.sha>+<run_number>` — the commit that produced the bundle, plus the run that deployed it |
 | environment | `production` |
+| url | the Pages URL, from `actions/deploy-pages` |
+| commits | associated via `set-commits --auto` when the repo is linked to the org through Sentry's GitHub integration |
+| sourcemaps | debug IDs injected into `dist/` before Pages publishes, uploaded against the release |
 
 The release version is the join key: the same value is the `release` tag on every
-event the deployed bundle sends, so "which build is this from?" is answerable
-from any event.
+event the deployed bundle sends, so a webhook consumer can go straight from
+"deploy happened" to "errors and transactions belonging to that deploy".
 
-The `+<run_number>` suffix guarantees **every deploy is a distinct release**.
-Without it, re-running the workflow on an unchanged commit piles the new run's
-telemetry onto the release that already carries the previous run's, which ruins
-any "this release introduced it" comparison. The SHA stays as the prefix, so a
-release is still traceable to its code and the short SHA still shows in the page
-footer.
+The `+<run_number>` suffix guarantees **every deploy is a net-new release**.
+Without it, re-running the workflow on an unchanged commit reuses the existing
+release — `POST /releases/` answers `208 Already Reported` — and the new deploy
+attaches to a release that already carries telemetry from the previous run,
+which ruins any "this release introduced it" comparison. The SHA stays as the
+prefix, so a release is still traceable to its code and the short SHA still
+shows in the page footer.
+
+## Differences from `main`
+
+| | `main` | this branch |
+| --- | --- | --- |
+| Sentry target | local devserver via ngrok | SaaS project `4511933085188096` |
+| `SENTRY_URL` | required, enables the release step | optional, defaults to `https://sentry.io/` |
+| Token secret | `SENTRY_DEV_TOKEN` | `SENTRY_AUTH_TOKEN` |
+| Step guard | `SENTRY_URL && SENTRY_PROJECT` | `SENTRY_PROJECT` |
+| `post-deploy-traffic` job | yes | **removed** |
+| `scripts/register-deploy.sh` | yes | **removed** |
+
+Dropping `post-deploy-traffic` has one consequence worth knowing: all of a
+release's telemetry is now timestamped *before* its deploy, because the only
+browser traffic comes from the pre-deploy smoke run. A webhook consumer that asks
+"what arrived **since** this deploy?" will correctly find nothing. Ask by
+`release` tag instead, or put that job back.
 
 ## Pages setup (one time)
 
