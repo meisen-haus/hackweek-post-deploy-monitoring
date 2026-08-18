@@ -25,14 +25,30 @@ async function boot(): Promise<void> {
       toDisplayDepartures(payload.departures)
     );
 
-    Sentry.startSpan({name: 'render board', op: 'ui.render'}, () => {
+    Sentry.startSpan({name: 'render board', op: 'ui.render'}, span => {
       renderBoard(board, rows);
       renderBuildInfo(buildInfo, payload.updatedAt);
+
+      span.setAttributes({
+        'ui.component_name': 'departure-board',
+        'board.row_count': rows.length,
+      });
+    });
+
+    // One comprehensive log with the state of the board, rather than several
+    // scattered ones. Correlated to the pageload trace automatically.
+    Sentry.logger.info('Departure board rendered', {
+      'board.row_count': rows.length,
+      'board.delayed_count': rows.filter(row => row.status === 'delayed').length,
+      'board.data_updated_at': payload.updatedAt,
     });
   } catch (error) {
     // Surface the failure to the user and to Sentry rather than leaving a
     // spinner on screen forever.
     renderError(board, 'Departures are unavailable right now.');
+    Sentry.logger.error('Departure board failed to load', {
+      'error.message': error instanceof Error ? error.message : String(error),
+    });
     Sentry.captureException(error);
   }
 }
