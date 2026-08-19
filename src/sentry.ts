@@ -35,6 +35,20 @@ function organization(): {id: string; slug: string} {
 }
 
 /**
+ * The synthetic end user behind the page load. Eight digits so it reads
+ * distinctly from the six-digit organization id above.
+ *
+ * Only ever used as `user.id`. Setting an email or username here would defeat
+ * showEmail/showName: the feedback widget reads exactly those two off the
+ * scope user, via the `useSentryUser` mapping, and would put contact_email and
+ * name back into a linked ticket. `user.id` is not in Sentry's evidence
+ * allowlist, so it stays out of the ticket body.
+ */
+function userId(): string {
+  return String(Math.floor(10_000_000 + Math.random() * 90_000_000));
+}
+
+/**
  * Telemetry setup. The DSN and release are injected at build time by the deploy
  * workflow so that every error, span and log is attributed to the exact commit
  * that produced it — that attribution is what the post-deploy webhook relies on.
@@ -105,6 +119,10 @@ export function initTelemetry(): void {
       userInfo: false,
     },
   });
+
+  // Applies to every event — errors, transactions and feedback alike — not
+  // just the feedback the organization tags are scoped to.
+  Sentry.setUser({id: userId()});
 
   // Exposed so the synthetic smoke tests can flush pending events before the
   // browser closes, instead of guessing at a sleep long enough to cover it.
