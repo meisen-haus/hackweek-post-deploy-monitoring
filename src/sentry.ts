@@ -1,15 +1,37 @@
 import * as Sentry from '@sentry/browser';
 
+const ORG_ADJECTIVES = [
+  'amber', 'brisk', 'cobalt', 'crimson', 'dusky', 'eager', 'fabled', 'gilded',
+  'hollow', 'ivory', 'jagged', 'keen', 'lucid', 'mellow', 'nimble', 'opal',
+  'quiet', 'rustic', 'silent', 'tidal',
+];
+
+const ORG_NOUNS = [
+  'anchor', 'beacon', 'canyon', 'delta', 'ember', 'falcon', 'grove', 'harbor',
+  'isle', 'junction', 'kestrel', 'lantern', 'meadow', 'nebula', 'orchard',
+  'pillar', 'quarry', 'ridge', 'summit', 'thicket',
+];
+
 /**
- * Synthetic organization the feedback is attributed to. A fresh id per page
- * load, so submissions spread across many orgs instead of piling onto one.
+ * A synthetic organization for feedback to be attributed to — a fresh one per
+ * page load, so submissions spread across many orgs instead of piling onto one.
  *
- * `Math.random()` is [0, 1), so this lands in 100000–999999 — always six
- * digits, never a leading zero. To keep a visitor on one org across reloads,
- * read it from sessionStorage here instead of generating it fresh.
+ * `Math.random()` is [0, 1), so the id lands in 100000–999999: always six
+ * digits, never a leading zero. The slug is *derived* from the id rather than
+ * drawn separately, so one org never shows up under two different slugs.
+ *
+ * The reverse is not true. 20 x 20 words is 400 slugs against 900000 ids, so
+ * distinct orgs do collide on a slug — fine for grouping a demo's feedback,
+ * not something to treat as a key. Append the id to the slug if you need it
+ * unique. To keep a visitor on one org across reloads, cache the result in
+ * sessionStorage.
  */
-function organizationId(): string {
-  return String(Math.floor(100_000 + Math.random() * 900_000));
+function organization(): {id: string; slug: string} {
+  const id = Math.floor(100_000 + Math.random() * 900_000);
+  const adjective = ORG_ADJECTIVES[id % ORG_ADJECTIVES.length];
+  const noun = ORG_NOUNS[Math.floor(id / ORG_ADJECTIVES.length) % ORG_NOUNS.length];
+
+  return {id: String(id), slug: `${adjective}-${noun}`};
 }
 
 /**
@@ -25,6 +47,7 @@ function organizationId(): string {
  */
 export function initTelemetry(): void {
   const dsn = import.meta.env.VITE_SENTRY_DSN;
+  const org = organization();
 
   if (!dsn) {
     // Local dev without a DSN should still boot; just skip telemetry.
@@ -50,9 +73,9 @@ export function initTelemetry(): void {
         triggerLabel: 'Report a problem',
         formTitle: 'Report a problem',
         submitButtonLabel: 'Send report',
-        // Merged into the feedback event by the integration, so the tag lands
+        // Merged into the feedback event by the integration, so the tags land
         // on submitted feedback only — not on errors or transactions.
-        tags: {organization: organizationId()},
+        tags: {organization: org.id, 'organization.slug': org.slug},
       }),
     ],
 
