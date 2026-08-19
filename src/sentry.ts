@@ -73,6 +73,14 @@ export function initTelemetry(): void {
         triggerLabel: 'Report a problem',
         formTitle: 'Report a problem',
         submitButtonLabel: 'Send report',
+        // The ticket body Sentry generates for a linked issue is a table of
+        // `evidence_display`, which make_evidence() builds from a fixed
+        // allowlist — associated_event_id, contact_email, message, name,
+        // is_spam, spam_detection_enabled — each row guarded by a presence
+        // check. Not collecting name or email is therefore what keeps those
+        // two rows out of the ticket; there is no formatting knob.
+        showName: false,
+        showEmail: false,
         // Merged into the feedback event by the integration, so the tags land
         // on submitted feedback only — not on errors or transactions.
         tags: {organization: org.id, 'organization.slug': org.slug},
@@ -89,8 +97,12 @@ export function initTelemetry(): void {
     // without this.
     enableLogs: true,
 
+    // Off (the default) on purpose. Auto-populating `user.*` would put an
+    // email on the scope, and the widget still picks that up for
+    // contact_email even with showEmail: false — which would put the row
+    // back in the ticket.
     dataCollection: {
-      userInfo: true,
+      userInfo: false,
     },
   });
 
